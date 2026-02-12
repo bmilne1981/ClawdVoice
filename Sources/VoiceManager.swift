@@ -21,7 +21,7 @@ class VoiceManager: NSObject, ObservableObject {
     private var openclawURL = "http://127.0.0.1:18789"
     private var openclawToken = ""
     private var elevenLabsAPIKey = ""
-    private let elevenLabsVoiceID = "UgBBYS2sOqTuMpoF3BR0"
+    private let elevenLabsVoiceID = "1SM7GgM6IMuvQlz2BwM3"
     
     override init() {
         super.init()
@@ -132,7 +132,7 @@ class VoiceManager: NSObject, ObservableObject {
         statusMessage = "Talking to Clawd..."
         
         // Use voice bridge for full session context
-        let bridgeURL = "http://localhost:8770/voice"
+        let bridgeURL = "http://192.168.1.197:8770/voice"
         let url = URL(string: bridgeURL)!
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
@@ -160,7 +160,15 @@ class VoiceManager: NSObject, ObservableObject {
                    let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                    let content = json["response"] as? String {
                     self?.lastResponse = content
-                    self?.speakResponse(content)
+                    
+                    // Check if bridge returned audio (preferred - uses correct voice)
+                    if let audioBase64 = json["audio"] as? String,
+                       let audioData = Data(base64Encoded: audioBase64) {
+                        self?.playAudioData(audioData)
+                    } else {
+                        // Fallback to local TTS
+                        self?.speakResponse(content)
+                    }
                 } else {
                     let responseStr = data.flatMap { String(data: $0, encoding: .utf8) } ?? "unknown"
                     print("Failed to parse response: \(responseStr)")
@@ -169,6 +177,23 @@ class VoiceManager: NSObject, ObservableObject {
                 }
             }
         }.resume()
+    }
+    
+    private func playAudioData(_ audioData: Data) {
+        statusMessage = "Speaking..."
+        
+        let tempURL = FileManager.default.temporaryDirectory.appendingPathComponent("clawd_response.mp3")
+        try? audioData.write(to: tempURL)
+        
+        do {
+            audioPlayer = try AVAudioPlayer(contentsOf: tempURL)
+            audioPlayer?.delegate = self
+            audioPlayer?.play()
+        } catch {
+            print("Audio playback error: \(error)")
+            statusMessage = "Ready"
+            isProcessing = false
+        }
     }
 
     private func speakResponse(_ text: String) {
@@ -194,7 +219,7 @@ class VoiceManager: NSObject, ObservableObject {
         
         let payload: [String: Any] = [
             "text": text,
-            "model_id": "eleven_monolingual_v1",
+            "model_id": "eleven_turbo_v2_5",
             "voice_settings": ["stability": 0.5, "similarity_boost": 0.75]
         ]
         request.httpBody = try? JSONSerialization.data(withJSONObject: payload)
@@ -207,19 +232,7 @@ class VoiceManager: NSObject, ObservableObject {
                     return
                 }
                 
-                // Save and play audio
-                let tempURL = FileManager.default.temporaryDirectory.appendingPathComponent("clawd_response.mp3")
-                try? data.write(to: tempURL)
-                
-                do {
-                    self?.audioPlayer = try AVAudioPlayer(contentsOf: tempURL)
-                    self?.audioPlayer?.delegate = self
-                    self?.audioPlayer?.play()
-                } catch {
-                    print("Audio playback error: \(error)")
-                    self?.statusMessage = "Ready"
-                    self?.isProcessing = false
-                }
+                self?.playAudioData(data)
             }
         }.resume()
     }
