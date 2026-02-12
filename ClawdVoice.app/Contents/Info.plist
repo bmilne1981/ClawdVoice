@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleName</key>
+    <string>ClawdVoice</string>
+    <key>CFBundleDisplayName</key>
+    <string>Clawd Voice</string>
+    <key>CFBundleIdentifier</key>
+    <string>com.clawd.voice</string>
+    <key>CFBundleVersion</key>
+    <string>1.0.0</string>
+    <key>CFBundleShortVersionString</key>
+    <string>1.0.0</string>
+    <key>CFBundleExecutable</key>
+    <string>ClawdVoice</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>LSMinimumSystemVersion</key>
+    <string>14.0</string>
+    <key>LSUIElement</key>
+    <true/>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>Clawd Voice needs microphone access to hear your voice commands.</string>
+    <key>NSSpeechRecognitionUsageDescription</key>
+    <string>Clawd Voice needs speech recognition to understand your commands.</string>
+    <key>NSPrincipalClass</key>
+    <string>NSApplication</string>
+</dict>
+</plist>
