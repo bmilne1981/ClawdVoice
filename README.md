@@ -4,6 +4,7 @@ A macOS menubar app for voice interaction with [OpenClaw](https://github.com/ope
 
 ## Features
 
+- **Instant ack**: Contextual acknowledgment plays immediately while response processes ("Let me check the weather...", "One sec...", etc.)
 - **Push-to-talk**: Hold `⌥Space` (Option+Space) to speak
 - **Full context**: Routes through your main OpenClaw session — same memory, same tools, same conversation
 - **Visual feedback**: Menubar icon animates while processing

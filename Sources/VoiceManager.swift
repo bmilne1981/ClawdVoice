@@ -17,11 +17,18 @@ class VoiceManager: NSObject, ObservableObject {
     private let speechRecognizer = SFSpeechRecognizer(locale: Locale(identifier: "en-US"))
     private var audioPlayer: AVAudioPlayer?
     
+    // Ack playback
+    private var ackPlayer: AVAudioPlayer?
+    private var pendingResponseAudio: Data?
+    private var pendingResponseText: String?
+    private var isPlayingAck = false
+    
     // Configuration
     private var openclawURL = "http://127.0.0.1:18789"
     private var openclawToken = ""
     private var elevenLabsAPIKey = ""
     private let elevenLabsVoiceID = "1SM7GgM6IMuvQlz2BwM3"
+    private let voiceBridgeHost = "http://192.168.1.197:8770"
     
     override init() {
         super.init()
@@ -125,15 +132,60 @@ class VoiceManager: NSObject, ObservableObject {
         }
         
         isProcessing = true
+        pendingResponseAudio = nil
+        pendingResponseText = nil
+        isPlayingAck = false
+        
+        // Fire both requests simultaneously:
+        // 1. Quick ack fetch (plays immediately)
+        // 2. Real request (plays after ack finishes)
+        fetchAndPlayAck(transcript: transcript)
         sendToOpenClaw(text: transcript)
     }
     
-    private func sendToOpenClaw(text: String) {
-        statusMessage = "Talking to Clawd..."
+    // MARK: - Ack System
+    
+    private func fetchAndPlayAck(transcript: String) {
+        let encoded = transcript.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""
+        let url = URL(string: "\(voiceBridgeHost)/voice/ack?q=\(encoded)")!
         
-        // Use voice bridge for full session context
-        let bridgeURL = "http://192.168.1.197:8770/voice"
-        let url = URL(string: bridgeURL)!
+        URLSession.shared.dataTask(with: url) { [weak self] data, response, error in
+            guard let self = self,
+                  let data = data,
+                  let httpResponse = response as? HTTPURLResponse,
+                  httpResponse.statusCode == 200,
+                  !data.isEmpty else {
+                return // No ack available, that's fine
+            }
+            
+            DispatchQueue.main.async {
+                self.playAckAudio(data)
+            }
+        }.resume()
+    }
+    
+    private func playAckAudio(_ audioData: Data) {
+        let tempURL = FileManager.default.temporaryDirectory.appendingPathComponent("clawd_ack.mp3")
+        try? audioData.write(to: tempURL)
+        
+        do {
+            ackPlayer = try AVAudioPlayer(contentsOf: tempURL)
+            ackPlayer?.delegate = self
+            isPlayingAck = true
+            statusMessage = "Speaking..."
+            ackPlayer?.play()
+        } catch {
+            print("Ack playback error: \(error)")
+            isPlayingAck = false
+        }
+    }
+    
+    // MARK: - Main Request
+    
+    private func sendToOpenClaw(text: String) {
+        statusMessage = isPlayingAck ? "Speaking..." : "Talking to Clawd..."
+        
+        let url = URL(string: "\(voiceBridgeHost)/voice")!
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -144,40 +196,53 @@ class VoiceManager: NSObject, ObservableObject {
         
         URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
             DispatchQueue.main.async {
+                guard let self = self else { return }
+                
                 if let error = error {
-                    self?.statusMessage = "Error: \(error.localizedDescription)"
-                    self?.isProcessing = false
+                    self.statusMessage = "Error: \(error.localizedDescription)"
+                    self.isProcessing = false
                     return
                 }
                 
                 if let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode != 200 {
-                    self?.statusMessage = "API Error: \(httpResponse.statusCode)"
-                    self?.isProcessing = false
+                    self.statusMessage = "API Error: \(httpResponse.statusCode)"
+                    self.isProcessing = false
                     return
                 }
                 
                 if let data = data,
                    let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                    let content = json["response"] as? String {
-                    self?.lastResponse = content
+                    self.lastResponse = content
                     
-                    // Check if bridge returned audio (preferred - uses correct voice)
+                    // Get the main response audio
+                    var responseAudio: Data? = nil
                     if let audioBase64 = json["audio"] as? String,
                        let audioData = Data(base64Encoded: audioBase64) {
-                        self?.playAudioData(audioData)
+                        responseAudio = audioData
+                    }
+                    
+                    if self.isPlayingAck {
+                        // Ack is still playing — queue the response for after
+                        self.pendingResponseAudio = responseAudio
+                        self.pendingResponseText = content
+                    } else if let audioData = responseAudio {
+                        // Ack already finished (or never played) — play response now
+                        self.playAudioData(audioData)
                     } else {
-                        // Fallback to local TTS
-                        self?.speakResponse(content)
+                        self.speakResponse(content)
                     }
                 } else {
                     let responseStr = data.flatMap { String(data: $0, encoding: .utf8) } ?? "unknown"
                     print("Failed to parse response: \(responseStr)")
-                    self?.statusMessage = "No response"
-                    self?.isProcessing = false
+                    self.statusMessage = "No response"
+                    self.isProcessing = false
                 }
             }
         }.resume()
     }
+    
+    // MARK: - Audio Playback
     
     private func playAudioData(_ audioData: Data) {
         statusMessage = "Speaking..."
@@ -200,7 +265,6 @@ class VoiceManager: NSObject, ObservableObject {
         statusMessage = "Speaking..."
         
         guard !elevenLabsAPIKey.isEmpty else {
-            // Fallback to system TTS
             let synth = NSSpeechSynthesizer()
             synth.startSpeaking(text)
             DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
@@ -210,7 +274,6 @@ class VoiceManager: NSObject, ObservableObject {
             return
         }
         
-        // Use ElevenLabs
         let url = URL(string: "https://api.elevenlabs.io/v1/text-to-speech/\(elevenLabsVoiceID)")!
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
@@ -241,8 +304,27 @@ class VoiceManager: NSObject, ObservableObject {
 extension VoiceManager: AVAudioPlayerDelegate {
     func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
         DispatchQueue.main.async {
-            self.statusMessage = "Ready"
-            self.isProcessing = false
+            if self.isPlayingAck {
+                // Ack finished — play queued response if ready
+                self.isPlayingAck = false
+                self.ackPlayer = nil
+                
+                if let audioData = self.pendingResponseAudio {
+                    self.pendingResponseAudio = nil
+                    self.pendingResponseText = nil
+                    self.playAudioData(audioData)
+                } else if let text = self.pendingResponseText {
+                    self.pendingResponseText = nil
+                    self.speakResponse(text)
+                } else {
+                    // Response not ready yet — sendToOpenClaw will handle it when it arrives
+                    self.statusMessage = "Thinking..."
+                }
+            } else {
+                // Main response finished
+                self.statusMessage = "Ready"
+                self.isProcessing = false
+            }
         }
     }
 }
